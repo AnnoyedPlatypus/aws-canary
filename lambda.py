@@ -3,14 +3,15 @@ import json
 import socket
 import requests
 import ssl
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 import boto3
 
 
-def check_page(url, expected_text, expected_http_status):
+def check_page(url, expected_text, expected_http_status, expected_connection):
     """
     Checks if a page meets the following conditions:
+    - The socket connection test passes if `expected_connection` is True.
     - Returns the expected HTTP status.
     - Contains the expected text.
     - Uses TLS 1.2 or later.
@@ -22,6 +23,20 @@ def check_page(url, expected_text, expected_http_status):
         if parsed_url.scheme != "https":
             return {"status": "failure", "reason": "URL is not using HTTPS"}
 
+        # Basic socket connection test
+        try:
+            with socket.create_connection((parsed_url.hostname, 443), timeout=5):
+                pass
+        except Exception as e:
+            if expected_connection:
+                return {"status": "failure", "reason": f"Connection failed: {str(e)}"}
+            else:
+                return {"status": "success", "reason": "Connection test skipped as expected_connection is False"}
+
+        # If expected_connection is False, skip further tests
+        if not expected_connection:
+            return {"status": "failure", "reason": "Socket connection test failed as expected_connection is False"}
+
         # Make the GET request
         response = requests.get(url, timeout=10)
         if response.status_code != expected_http_status:
@@ -31,7 +46,7 @@ def check_page(url, expected_text, expected_http_status):
             }
 
         # Check for the expected text
-        if expected_text and expected_text not in response.text:
+        if expected_text not in response.text:
             return {"status": "failure", "reason": f"Text '{expected_text}' not found on page"}
 
         # Check TLS version and certificate expiration
@@ -53,7 +68,6 @@ def check_page(url, expected_text, expected_http_status):
 
     except Exception as e:
         return {"status": "failure", "reason": str(e)}
-
 
 def send_sns_notification(sns_topic, message, subject="Canary Test Failure"):
     """
@@ -78,21 +92,37 @@ def get_inputs_from_dynamodb(table_name):
     return response.get("Items", [])
 
 
-def update_dynamodb_record(table_name, record_id, result, reason, sns_notified):
+def update_dynamodb_record(table_name, record_id, test_result, test_reason, sns_notified, last_tested_at, created_at, modified_at):
     """
-    Updates a record in DynamoDB with the test result, timestamp, and SNS notification flag.
+    Updates a record in the DynamoDB table with test results and timestamps.
     """
     dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(table_name)
+
+    # Ensure created_at is set if missing
+    if not created_at:
+        created_at = datetime.now(timezone.utc).isoformat()
+
+    # Construct the update expression
+    update_expression = "SET last_tested_at = :last_tested_at, test_result = :test_result, test_reason = :test_reason, sns_notified = :sns_notified, modified_at = :modified_at"
+    expression_attribute_values = {
+        ":last_tested_at": last_tested_at,
+        ":test_result": test_result,
+        ":test_reason": test_reason,
+        ":sns_notified": sns_notified,
+        ":modified_at": modified_at,
+    }
+
+    # Add created_at if not already present
+    if created_at:
+        update_expression += ", created_at = if_not_exists(created_at, :created_at)"
+        expression_attribute_values[":created_at"] = created_at
+
+    # Update the DynamoDB record
     table.update_item(
         Key={"id": record_id},
-        UpdateExpression="SET test_result = :result, test_reason = :reason, last_tested = :timestamp, sns_notified = :sns_notified",
-        ExpressionAttributeValues={
-            ":result": result,
-            ":reason": reason,
-            ":timestamp": datetime.utcnow().isoformat(),
-            ":sns_notified": sns_notified
-        }
+        UpdateExpression=update_expression,
+        ExpressionAttributeValues=expression_attribute_values,
     )
 
 
@@ -105,17 +135,33 @@ def run_canary(table_name):
     namespace = "SyntheticMonitoring/CanaryChecks"
 
     for record in inputs:
+        # Check if the record is marked as active
+        is_active = record.get("active", False)
+        if not is_active:
+            print(f"Skipping record {record.get('id')} as it is not active.")
+            continue  # Skip this record
+        
         url = record.get("url")
         expected_text = record.get("expected_text")
         expected_http_status = record.get("expected_http_status", 200)
-        sns_topic = record.get("sns")  # Optional
+        expected_connection = record.get("expected_connection", True)  # Default to True
+        sns_topic = record.get("sns")
         record_id = record.get("id")
-        sns_notified = record.get("sns_notified", False)  # Check if notification was sent previously
+        sns_notified = record.get("sns_notified", False)
+
+        # Set missing datetime fields
+        created_at = record.get("created_at")
+        if not created_at:
+            created_at = datetime.now(timezone.utc).isoformat()
+
+        modified_at = record.get("modified_at")
+        if not modified_at:
+            modified_at = datetime.now(timezone.utc).isoformat()
 
         print(f"Running check for URL: {url}, expected text: '{expected_text}'")
 
         # Perform the page check
-        result = check_page(url, expected_text, expected_http_status)
+        result = check_page(url, expected_text, expected_http_status, expected_connection)
 
         # Determine if SNS should be sent (only send if failed and sns_notified is False)
         if result["status"] == "failure" and sns_topic and not sns_notified:
@@ -136,7 +182,10 @@ def run_canary(table_name):
             record_id,
             result["status"],
             result["reason"],
-            sns_notified
+            sns_notified,
+            last_tested_at=datetime.now(timezone.utc).isoformat(),
+            created_at=created_at,
+            modified_at=modified_at
         )
 
         # Publish metrics to CloudWatch
