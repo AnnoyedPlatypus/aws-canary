@@ -2,7 +2,7 @@
 
 ### Description
 
-Lambda function in Python that takes inputs from a DynamoDB table and runs various tests against the URLs to confirm they're operating as expected.
+Python scripts that take inputs from a DynamoDB or Supabase table and runs various tests against the URLs to confirm they're operating as expected.
 
 Tests currently implemented,
 
@@ -12,13 +12,13 @@ Tests currently implemented,
 - Certificate not expired
 - Web server is running TLS 1.2 or later
 
-On failure an AWS SNS topic will be used to send a notification of the failure. The topic needs an email subscriber to function. Only one notification is sent at failure time and on-going failures will not notify again.
+On failure a notification can be sent. For an SNS topic an email subscriber is required. Only one notification is sent at failure time and on-going failures will not notify again.
 
-The function is triggered every 60min by an Eventbridge function.
+The function is triggered on a schedule.
 
-Cloudwatch logging captures the output of the Lambda function and retains the data for one week.
+If using AWS, Cloudwatch logging captures the output of the Lambda function and retains the data for one week.
 
-### Example DynamoDB Record
+### Example AWS DynamoDB Record
 
 ```
 {
@@ -56,6 +56,8 @@ Cloudwatch logging captures the output of the Lambda function and retains the da
 ```
 
 ### Requirements
+
+#### AWS Lambda Function
 
 To get the Python `requests` library included (as AWS Lambda does not include it by default), we need to create a Lambda Layer that includes it.
 
