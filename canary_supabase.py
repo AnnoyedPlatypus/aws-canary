@@ -275,6 +275,8 @@ def check_tls_version(host):
 
 def check_certificate_expiry(host):
     url = host["url"]
+    expected_result = host.get("expected_result")
+
     try:
         hostname = url.replace("https://", "").split("/")[0]
         context = ssl.create_default_context()
@@ -282,12 +284,17 @@ def check_certificate_expiry(host):
             with context.wrap_socket(sock, server_hostname=hostname) as ssock:
                 cert = ssock.getpeercert()
                 not_after = datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z")
-                if not_after < datetime.now():
-                    return {"test_result": "failure", "test_reason": "Certificate expired"}
-                return {"test_result": "success", "test_reason": None}
+                if not_after < datetime.now() and expected_result.casefold() == "true":
+                    return {"test_result": "failure", "test_reason": "UNEXPECTED: Certificate is expired"}
+                return {"test_result": "success", "test_reason": "Certificate is not expired"}
     except Exception as e:
-        return {"test_result": "failure", "test_reason": str(e)}
-
+        response = str(e)
+        if response.find("certificate has expired") and expected_result.casefold() == "true":
+            return {"test_result": "failure", "test_reason": "Certificate is expired"}
+        elif response.find("certificate has expired") and expected_result.casefold() == "false":
+            return {"test_result": "failure", "test_reason": "Certificate is expired"}
+        return {"test_result": "failure", "test_reason": f"Unknown error, {str(e)}"}
+    
 
 if __name__ == "__main__":
     #def lambda_handler(event, context):
