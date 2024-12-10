@@ -1,2 +1,3 @@
 lambda_layers/
 credentials.py
+__pycache__/

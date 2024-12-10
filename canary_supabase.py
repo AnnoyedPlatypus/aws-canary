@@ -137,13 +137,12 @@ def check_up_or_down(host):
 
 def check_http_code(host):
     url = host["url"]
-    print(f"{url}")
     expected_http_code = json.loads(host.get("expected_result", "200"))
 
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == expected_http_code:
-            return {"test_result": "success", "test_reason": f"HTTP response {expected_http_code} as expected"}
+            return {"test_result": "success", "test_reason": f"HTTP {expected_http_code} response as expected"}
         else:
             return {
                 "test_result": "failure",
@@ -292,7 +291,7 @@ def check_certificate_expiry(host):
         if response.find("certificate has expired") and expected_result.casefold() == "true":
             return {"test_result": "failure", "test_reason": "Certificate is expired"}
         elif response.find("certificate has expired") and expected_result.casefold() == "false":
-            return {"test_result": "failure", "test_reason": "Certificate is expired"}
+            return {"test_result": "success", "test_reason": "Certificate is expired"}
         return {"test_result": "failure", "test_reason": f"Unknown error, {str(e)}"}
     
 
